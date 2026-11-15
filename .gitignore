@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+fencepost-out/
+out-*/
+proof/proxy.jsonl
+.pytest_cache/
+.om/

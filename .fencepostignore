@@ -1,0 +1,3 @@
+# Deliberately broken test corpus: these repositories lie on purpose.
+fixtures/
+out-self/
