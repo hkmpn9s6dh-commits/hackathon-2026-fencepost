@@ -45,9 +45,7 @@ class Handler(BaseHTTPRequestHandler):
             headers = {"Content-Type": "application/json"}
 
         self.send_response(code)
-        for key in ("Content-Type", "Content-Length"):
-            if key in headers:
-                self.send_header(key, headers[key])
+        self.send_header("Content-Type", headers.get("Content-Type", "application/json"))
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)

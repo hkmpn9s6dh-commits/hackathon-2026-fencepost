@@ -59,3 +59,23 @@ def test_fencepostignore_excludes_paths(tmp_path):
     (tmp_path / ".fencepostignore").write_text("vendor/\n", encoding="utf-8")
     repo = load_repo(tmp_path)
     assert "yaml" not in repo.imports
+
+
+def test_python_mention_without_a_requirement_verb_is_not_a_claim(tmp_path):
+    from fencepost.extract import cli_names_for, extract_with_rules
+    from fencepost.scan.docs import Chunk
+
+    text = "# demo\n\nMeasured on Python 3.12.14 with a local model.\n"
+    chunk = Chunk(path="README.md", heading="demo", start_line=1, text=text)
+    result = extract_with_rules(text, chunk, cli_names_for("demo"))
+    assert result.claims == []
+
+
+def test_python_requirement_verb_keeps_the_claim():
+    from fencepost.extract import cli_names_for, extract_with_rules
+    from fencepost.scan.docs import Chunk
+
+    text = "# demo\n\nRequires Python 3.11 or newer.\n"
+    chunk = Chunk(path="README.md", heading="demo", start_line=1, text=text)
+    result = extract_with_rules(text, chunk, cli_names_for("demo"))
+    assert [claim.value for claim in result.claims] == ["3.11"]

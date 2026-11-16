@@ -28,11 +28,22 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--out", default="", help="output directory (default: <repo>/fencepost-out)")
     audit.add_argument("--no-model", action="store_true", help="rules only; no model calls at all")
     audit.add_argument("--model", default=None, help="override the OpenMinion model id")
-    audit.add_argument("--timeout", type=float, default=240.0, help="per-turn timeout in seconds")
+    audit.add_argument("--timeout", type=float, default=180.0, help="per-turn timeout in seconds")
+    audit.add_argument(
+        "--counter-reader",
+        action="store_true",
+        help="add the delegated adversary pass (one more turn; slow on CPU models)",
+    )
     audit.add_argument("--two-pass", action="store_true", help="also run a separate reviewer pass before the counter-reader")
     audit.add_argument("--with-tools", action="store_true", help="let the reviewer call read_lines (slower)")
     audit.add_argument("--chunks", type=int, default=3, help="how many document chunks to send to the model")
     audit.add_argument("--only", default="", help="comma separated: python_requires,dependency,command,env_var")
+    audit.add_argument(
+        "--ignore",
+        default=[],
+        action="append",
+        help="KIND:VALUE to accept knowingly, e.g. env_var:OPENAI_API_KEY (repeatable)",
+    )
     audit.add_argument("--fail-on", choices=sorted(FAIL_ON), default="high", help="exit 1 at or above this severity")
     audit.add_argument("--yes", action="store_true", help="write the report without asking")
     audit.add_argument("--title", default="", help="title shown on the report")
@@ -75,8 +86,10 @@ def _audit(args) -> int:
         timeout_seconds=args.timeout,
         reviewer_tools=args.with_tools,
         two_pass=args.two_pass,
+        counter_reader=args.counter_reader,
         prospect_chunks=args.chunks,
         kinds=kinds,
+        ignore={part.strip() for part in ",".join(args.ignore or []).split(",") if part.strip()},
         log=log,
     )
     ledger = run_audit(options)

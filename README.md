@@ -9,6 +9,34 @@ supposed to keep it, and writes an evidence ledger where each row carries two
 
 Built for **Cortensor Hackathon #5** on the **OpenMinion 0.1 Python SDK**.
 
+Use it the day you notice your README and your code disagree, or the week before
+you ship: point it at a repository, get a ledger where every row is two
+`file:line` citations and a verdict.
+
+Here is a real run, unedited, against the deliberately broken fixture
+`fixtures/multi`:
+
+```console
+$ fencepost audit fixtures/multi --no-model --yes
+fencepost · multi
+  2 promises survived the quote gate, 0 refused
+  4 pairs to judge
+
+  4 drift  ·  high 3  ·  refused quotes 0  ·  0.0s
+   1. [high  ] README.md:13  multi verify
+   2. [high  ] pyproject.toml:5  dependencies = ["httpx"]
+   3. [high  ] README.md:5  Requires Python 3.11 or newer.
+   4. [low   ] pyproject.toml:5  httpx
+  written: fixtures/multi/fencepost-out/ledger.json
+           fixtures/multi/fencepost-out/report.md
+           fixtures/multi/fencepost-out/report.html
+```
+
+`--no-model` is the deterministic half: four detectors, no model, 0.2 s. Attach a
+model and the same audit also asks it to propose quotes (each one checked
+character by character) and hands the findings to a delegated counter-reader.
+`docs/05-FINDINGS.md` records what that costs on a CPU-only 4B model.
+
 ---
 
 ## The one design decision everything else follows
@@ -48,7 +76,7 @@ Fencepost needs an OpenAI-compatible endpoint. Any of these work:
 
 ```bash
 # a hosted provider
-export OPENAI_COMPATIBLE_API_KEY=...        # or OPENAI_API_KEY for the openai preset
+export OPENAI_COMPATIBLE_API_KEY=...
 openminion setup --provider openai --model gpt-4.1-mini --no-chat
 
 # or a local llama.cpp server, no key, no network

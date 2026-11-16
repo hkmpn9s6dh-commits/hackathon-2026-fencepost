@@ -9,3 +9,4 @@ out-*/
 proof/proxy.jsonl
 .pytest_cache/
 .om/
+.tmp-*/

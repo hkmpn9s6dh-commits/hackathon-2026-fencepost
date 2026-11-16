@@ -18,6 +18,7 @@ from .scan.code import (
     collect_imports,
     collect_subcommands,
     count_python_files,
+    python_files,
 )
 from .scan.docs import DocFile, doc_files
 from .scan.project import ProjectInfo, load_project, normalise_dist, version_floor
@@ -61,6 +62,7 @@ class Repo:
     docs: list[DocFile] = field(default_factory=list)
     pyproject_text: str = ""
     files_scanned: int = 0
+    local_modules: set[str] = field(default_factory=set)
 
 
 IGNORE_FILE = ".fencepostignore"
@@ -88,7 +90,12 @@ def load_repo(root: Path) -> Repo:
     repo.env_reads = collect_env_reads(root, excludes)
     repo.subcommands = collect_subcommands(root, excludes)
     repo.docs = doc_files(root)
-    repo.files_scanned = count_python_files(root, excludes) + len(repo.docs) + (1 if project.has_pyproject else 0)
+    repo.files_scanned = count_python_files(root, excludes) + len(repo.docs) + (
+        1 if project.has_pyproject else 0
+    )
+    repo.local_modules = {
+        path.stem for path in python_files(root, excludes) if path.stem != "__init__"
+    }
     return repo
 
 
@@ -184,6 +191,8 @@ def pair_dependencies(repo: Repo, claims: list[Claim]) -> list[Candidate]:
     for module, ref in sorted(repo.imports.items()):
         key = _norm(module)
         if key in own or module in own:
+            continue
+        if module in repo.local_modules:
             continue
         if key in declared_names:
             continue

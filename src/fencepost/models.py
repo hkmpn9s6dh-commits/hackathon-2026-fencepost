@@ -139,15 +139,20 @@ class Ledger(BaseModel):
     version: int = 1
     run: RunInfo
     findings: list[Finding] = Field(default_factory=list)
+    rejected_rebuttals: list[dict] = Field(
+        default_factory=list,
+        description="Counter-reader claims that were refused for lack of evidence.",
+    )
     dropped_quotes: list[dict] = Field(
         default_factory=list,
         description="Quotes the model offered that did not exist verbatim in the file.",
     )
 
     def count(self, severity: Severity | None = None) -> int:
+        live = [f for f in self.findings if f.is_drift and not f.rebutted]
         if severity is None:
-            return sum(1 for f in self.findings if f.is_drift)
-        return sum(1 for f in self.findings if f.is_drift and f.severity is severity)
+            return len(live)
+        return sum(1 for f in live if f.severity is severity)
 
     def breakdown(self) -> dict[str, int]:
         out: dict[str, int] = {}

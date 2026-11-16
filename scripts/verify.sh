@@ -21,9 +21,9 @@ say ""
 # ---------------------------------------------------------------- 0. interpreter
 PY="${PYTHON:-}"
 if [ -z "$PY" ]; then
-  for candidate in python3.12 python3.11 python3.13 python3; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+  for candidate in python3.12 python3.11 python3.13 python3 "py -3.12" "py -3.11"; do
+    if command -v ${candidate%% *} >/dev/null 2>&1; then
+      if $candidate -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
         PY="$candidate"; break
       fi
     fi

@@ -36,7 +36,9 @@ class AuditOptions:
     timeout_seconds: float = 600.0
     prospect_chunks: int = DEFAULT_PROSPECT_CHUNKS
     kinds: set[Kind] = field(default_factory=lambda: set(Kind))
+    ignore: set[str] = field(default_factory=set)
     reviewer_tools: bool = False
+    counter_reader: bool = False
     two_pass: bool = False
     log: Callable[[str], None] | None = None
 
@@ -53,7 +55,7 @@ def run_audit(options: AuditOptions) -> Ledger:
     claims, dropped, bridge = _collect_claims(repo, options, log)
     log(f"  {len(claims)} promises survived the quote gate, {len(dropped)} refused")
 
-    candidates = _pair(repo, claims, options.kinds)
+    candidates = _pair(repo, claims, options.kinds, options.ignore)
     log(f"  {len(candidates)} pairs to judge")
 
     assessments = {}
@@ -67,7 +69,7 @@ def run_audit(options: AuditOptions) -> Ledger:
                 c for c in drifting
                 if c.id not in assessments or assessments[c.id].verdict is Verdict.DRIFT
             ]
-        if drifting:
+        if drifting and options.counter_reader:
             log(f"  counter-reader on {min(len(drifting), 10)} findings")
             rebuttals = bridge.rebut(drifting[:10])
 
@@ -94,7 +96,12 @@ def run_audit(options: AuditOptions) -> Ledger:
         output_tokens=metrics.output_tokens if metrics else 0,
         tool_calls=metrics.tool_calls if metrics else 0,
     )
-    return Ledger(run=run, findings=findings, dropped_quotes=dropped)
+    return Ledger(
+        run=run,
+        findings=findings,
+        dropped_quotes=dropped,
+        rejected_rebuttals=(bridge.rejected_rebuttals if bridge else []),
+    )
 
 
 def _collect_claims(repo: Repo, options: AuditOptions, log) -> tuple[list, list[dict], Bridge | None]:
@@ -114,6 +121,7 @@ def _collect_claims(repo: Repo, options: AuditOptions, log) -> tuple[list, list[
         return claims, dropped, bridge
 
     bridge = Bridge(
+        root=repo.root,
         session_id=f"fencepost-{repo.project.name}",
         model=options.model,
         timeout_seconds=options.timeout_seconds,
@@ -161,7 +169,7 @@ def _merge(claims: list, incoming, limit: int | None = None) -> None:
         claims.append(claim)
 
 
-def _pair(repo: Repo, claims: list, kinds: set[Kind]) -> list[Candidate]:
+def _pair(repo: Repo, claims: list, kinds: set[Kind], ignore: set[str]) -> list[Candidate]:
     out: list[Candidate] = []
     if Kind.PYTHON_REQUIRES in kinds:
         out += detectors.pair_python_requires(repo, [c for c in claims if c.kind is Kind.PYTHON_REQUIRES])
@@ -171,6 +179,12 @@ def _pair(repo: Repo, claims: list, kinds: set[Kind]) -> list[Candidate]:
         out += detectors.pair_commands(repo, [c for c in claims if c.kind is Kind.COMMAND])
     if Kind.ENV_VAR in kinds:
         out += detectors.pair_env(repo, [c for c in claims if c.kind is Kind.ENV_VAR])
+    if ignore:
+        out = [
+            item
+            for item in out
+            if f"{item.kind.value}:{item.claim.value}" not in ignore
+        ]
     return out
 
 

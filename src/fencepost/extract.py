@@ -14,12 +14,18 @@ from .models import Claim, Kind
 from .scan.docs import Chunk
 
 PY_MENTION = re.compile(r"(?:requires?\s+)?Python\s*(?:>=|≥|>)?\s*3\.(\d+)", re.IGNORECASE)
+REQUIREMENT_HINT = re.compile(
+    r"(require|need|support|minimum|at least|\+|or newer|or later|以上|不低于|需)", re.IGNORECASE
+)
 ENV_MENTION = re.compile(r"\b([A-Z][A-Z0-9]{2,}_(?:API_KEY|ACCESS_KEY|TOKEN|SECRET|KEY|DSN))\b")
 CREDENTIAL_HINT = re.compile(
     r"(api[ _-]?key|token|secret|credential|password|env(?:ironment)? var)", re.IGNORECASE
 )
 COMMAND_HINT = re.compile(r"`([a-z][a-z0-9_.-]{1,24})\s+([a-z][a-z0-9-]{1,24})")
 INSTALL_HINT = re.compile(r"(pip install|uv add|pipx install|python -m pip)", re.IGNORECASE)
+INLINE_CODE = re.compile(r"`[^`]*`")
+# ``YOUR_API_KEY`` / ``MY_TOKEN`` are blanks to fill in, not names to read.
+PLACEHOLDER_ENV = re.compile(r"^(?:YOUR|MY|EXAMPLE|SAMPLE|DUMMY|FAKE|PLACEHOLDER|XXX)[_-]")
 
 
 @dataclass(slots=True)
@@ -55,7 +61,13 @@ def extract_with_rules(doc_text: str, chunk: Chunk, cli_names: set[str]) -> Extr
     order = 0
 
     for match in PY_MENTION.finditer(chunk.text):
-        line = _line_with(chunk.text, match.start())
+        line, start = _line_span(chunk.text, match.start())
+        if not REQUIREMENT_HINT.search(line):
+            # "measured on Python 3.12" is a fact, not a requirement.
+            continue
+        if _is_specimen(line, match.start() - start):
+            dropped.append({"quote": line.strip(), "why": "specimen in a reference table"})
+            continue
         claim = _claim(chunk, doc_text, line, Kind.PYTHON_REQUIRES, f"3.{match.group(1)}", order)
         if claim and _fresh(claims, claim):
             claims.append(claim)
@@ -63,8 +75,15 @@ def extract_with_rules(doc_text: str, chunk: Chunk, cli_names: set[str]) -> Extr
 
     if CREDENTIAL_HINT.search(chunk.text) or "```" in chunk.text:
         for match in ENV_MENTION.finditer(chunk.text):
-            line = _line_with(chunk.text, match.start())
-            claim = _claim(chunk, doc_text, line, Kind.ENV_VAR, match.group(1), order)
+            line, start = _line_span(chunk.text, match.start())
+            name = match.group(1)
+            if PLACEHOLDER_ENV.search(name):
+                dropped.append({"quote": line.strip(), "why": f"`{name}` is a placeholder"})
+                continue
+            if _is_specimen(line, match.start() - start):
+                dropped.append({"quote": line.strip(), "why": "specimen in a reference table"})
+                continue
+            claim = _claim(chunk, doc_text, line, Kind.ENV_VAR, name, order)
             if claim and _fresh(claims, claim):
                 claims.append(claim)
                 order += 1
@@ -73,6 +92,10 @@ def extract_with_rules(doc_text: str, chunk: Chunk, cli_names: set[str]) -> Extr
         binary, subcommand = match.group(1), match.group(2)
         if binary not in cli_names:
             continue
+        line, start = _line_span(chunk.text, match.start())
+        if _is_specimen(line, match.start() - start):
+            dropped.append({"quote": line.strip(), "why": "specimen in a reference table"})
+            continue
         tool_line = f"{binary} {subcommand}"
         claim = _claim(chunk, doc_text, tool_line, Kind.COMMAND, subcommand, order)
         if claim and _fresh(claims, claim):
@@ -80,6 +103,29 @@ def extract_with_rules(doc_text: str, chunk: Chunk, cli_names: set[str]) -> Extr
             order += 1
 
     return Extraction(claims=claims, dropped=dropped)
+
+
+def _line_span(text: str, index: int) -> tuple[str, int]:
+    """The whole raw line around ``index``, plus where that line starts."""
+
+    start = text.rfind("\n", 0, index) + 1
+    end = text.find("\n", index)
+    if end < 0:
+        end = len(text)
+    return text[start:end], start
+
+
+def _is_specimen(line: str, offset: int) -> bool:
+    """Inline code on a table row is an example, not a promise.
+
+    ``| `env_var` | "set `OPENAI_API_KEY`" | os.environ |`` describes what the
+    checker looks for. A table cell written in code is a specimen; requirements
+    belong in prose.
+    """
+
+    if not line.lstrip().startswith("|"):
+        return False
+    return any(m.start() <= offset < m.end() for m in INLINE_CODE.finditer(line))
 
 
 def _line_with(text: str, index: int) -> str:

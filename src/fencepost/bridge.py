@@ -53,12 +53,13 @@ severity is high, medium, or low."""
 REBUT_INSTRUCTIONS = """You are the counter-reader. Your job is to knock findings down.
 
 Reply with ONE JSON object and nothing else:
-{"items": [{"id": "...", "rebut": true, "reason": "..."}]}
+{"items": [{"id": "...", "rebut": false, "reason": "...", "evidence": ""}]}
 
-Say rebut=true when the finding is not actually a contradiction: the two sides
-talk about different things, the promise is scoped to another tool, or the code
-snippet already proves the promise. Otherwise rebut=false.
-"reason" is at most 200 characters and must point at the text you relied on."""
+rebut=true ONLY when you can quote, character for character, a line that already
+satisfies the promise, and put that line in "evidence". If you cannot quote such
+a line, rebut must be false. A rebuttal without evidence is not a rebuttal.
+"reason" is at most 200 characters.
+When in doubt, rebut=false: a finding you cannot refute is the point of the report."""
 
 
 class Proposal(BaseModel):
@@ -86,6 +87,10 @@ class RebuttalItem(BaseModel):
     id: str
     rebut: bool
     reason: str = ""
+    evidence: str = Field(
+        default="",
+        description="Verbatim quote that satisfies the promise; required when rebut is true.",
+    )
 
 
 class RebuttalBatch(BaseModel):
@@ -119,6 +124,36 @@ def read_lines(path: str, start: int = 1, count: int = 24) -> dict:
     }
 
 
+def _first_json_object(text: str) -> str | None:
+    """Pull the first balanced {...} out of whatever the model wrapped it in."""
+
+    start = text.find("{")
+    while start >= 0:
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : index + 1]
+        start = text.find("{", start + 1)
+    return None
+
+
 @dataclass
 class BridgeMetrics:
     calls: int = 0
@@ -136,6 +171,7 @@ class Bridge:
     def __init__(
         self,
         *,
+        root=None,
         session_id: str,
         model: str | None = None,
         timeout_seconds: float = 600.0,
@@ -145,6 +181,8 @@ class Bridge:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.metrics = BridgeMetrics()
+        self.rejected_rebuttals: list[dict] = []
+        self._root = root
         self._log = log or (lambda message: None)
 
     # ------------------------------------------------------------------ extract
@@ -243,6 +281,7 @@ class Bridge:
                     else "not found"
                 ),
                 "reason": item.machine_reason,
+                "subject": item.claim.value,
             }
             for item in candidates[:10]
         ]
@@ -279,19 +318,68 @@ class Bridge:
         output = result.output
         if not isinstance(output, RebuttalBatch):
             return {}
-        known = {entry["id"] for entry in payload}
-        return {
-            item.id: Rebuttal(rebut=item.rebut, reason=item.reason[:240])
-            for item in output.items
-            if item.id in known
-        }
+        known = {entry["id"]: entry for entry in payload}
+        accepted: dict[str, Rebuttal] = {}
+        for item in output.items:
+            entry = known.get(item.id)
+            if entry is None or not item.rebut:
+                continue
+            verdict = self._check_rebuttal(item, entry)
+            if verdict is None:
+                accepted[item.id] = Rebuttal(rebut=True, reason=item.reason[:240] or item.evidence[:240])
+            else:
+                self.rejected_rebuttals.append(
+                    {"id": item.id, "reason": verdict, "evidence": item.evidence[:160]}
+                )
+        return accepted
+
+    def _check_rebuttal(self, item: RebuttalItem, entry: dict) -> str | None:
+        """A rebuttal has to bring a quote that actually answers the promise."""
+
+        evidence = (item.evidence or "").strip()
+        if len(evidence) < 8:
+            return "rebuttal carried no evidence quote"
+        subject = str(entry.get("subject") or "").strip().lower()
+        if subject and subject not in evidence.lower():
+            return f"evidence never mentions {subject}"
+        if not self._evidence_in_repo(evidence, entry):
+            return "evidence not found verbatim in the repository"
+        return None
+
+    def _evidence_in_repo(self, evidence: str, entry: dict) -> bool:
+        if self._root is None:
+            return True
+        candidates = [entry.get("code_at", ""), entry.get("promise_at", "")]
+        paths = []
+        for value in candidates:
+            path = str(value).rsplit(":", 1)[0].strip()
+            if path:
+                paths.append(path)
+        for path in paths:
+            target = self._root / path
+            if target.is_file():
+                text = target.read_text(encoding="utf-8", errors="replace")
+                if evidence in text:
+                    return True
+        for path in ("README.md", "pyproject.toml"):
+            target = self._root / path
+            if target.is_file() and evidence in target.read_text(encoding="utf-8", errors="replace"):
+                return True
+        return False
 
     # --------------------------------------------------------------------- call
 
     def _call(self, *, label, instructions, output_type, message, tools=None):
+        """One real SDK turn, plain text, parsed here.
+
+        ``output_type`` would be the obvious choice, but on a 4B local model the
+        SDK's schema-validation retry loop re-sends the identical request and
+        never converges inside the turn budget (see docs/05-FINDINGS.md 2.6), so
+        Fencepost asks for text and validates the answer itself.
+        """
+
         agent = Agent(
             instructions=instructions,
-            output_type=output_type,
             tools=tools if tools is not None else [],
             name="fencepost",
             session_id=self.session_id,
@@ -301,21 +389,32 @@ class Bridge:
             started = time.time()
             try:
                 result = agent.run(message, timeout_seconds=self.timeout_seconds)
-            except AgentOutputValidationError as exc:
-                self.metrics.failures += 1
-                self._log(f"    {label}: invalid JSON (attempt {attempt}) {str(exc)[:120]}")
-                message = message + "\n\nREMINDER: reply with ONE JSON object, no prose."
-                continue
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - a failed turn must not kill an audit
                 self.metrics.failures += 1
                 self._log(f"    {label}: {type(exc).__name__}: {str(exc)[:160]}")
                 return None
             finally:
                 self.metrics.seconds += time.time() - started
+
             self.metrics.calls += 1
             self._record_stats(result.stats or {}, result.run_id)
-            self._log(f"    {label}: {result.run_state} {result.stats.get('llm_calls', '?')} llm calls")
-            return result.output
+
+            raw = result.text or ""
+            payload = _first_json_object(raw)
+            if payload is None:
+                self.metrics.failures += 1
+                self._log(f"    {label}: no JSON in reply (attempt {attempt}) {raw[:80]!r}")
+                message = message + "\n\nREMINDER: reply with ONE JSON object and no prose."
+                continue
+            try:
+                parsed = output_type.model_validate_json(payload)
+            except Exception as exc:  # noqa: BLE001
+                self.metrics.failures += 1
+                self._log(f"    {label}: schema mismatch (attempt {attempt}) {str(exc)[:120]}")
+                message = message + "\n\nREMINDER: follow the JSON shape exactly."
+                continue
+            self._log(f"    {label}: {result.run_state} in {result.stats.get('duration_ms', 0) / 1000:.0f}s")
+            return parsed
         return None
 
     def _record_stats(self, stats: dict, run_id: str | None) -> None:
