@@ -131,12 +131,13 @@ def render_html(ledger: Ledger, title: str) -> str:
         font-weight: 600; padding: 0 10px 8px 0; border-bottom: 1px solid var(--ink); }}
   td {{ vertical-align: top; padding: 14px 10px 14px 0; border-bottom: 1px solid var(--rule); }}
   td.n {{ color: var(--soft); font-variant-numeric: tabular-nums; width: 26px; }}
+  td.type {{ min-width: 92px; }}
   .tag {{ display: inline-block; font-size: 11px; letter-spacing: .06em; padding: 2px 7px;
           border: 1px solid currentColor; border-radius: 2px; white-space: nowrap; }}
   .tag.high {{ color: var(--high); }}
   .tag.medium {{ color: var(--mid); }}
   .tag.low {{ color: var(--low); }}
-  .kind {{ display: block; margin-top: 6px; font-size: 12px; color: var(--soft); }}
+  .kind {{ display: block; margin-top: 6px; font-size: 12px; color: var(--soft); white-space: nowrap; }}
   .where {{ font-family: "SFMono-Regular", Consolas, monospace; font-size: 11.5px; color: var(--soft); }}
   .quote {{ font-family: "SFMono-Regular", Consolas, monospace; font-size: 12.5px;
             background: var(--tint); padding: 7px 9px; margin: 3px 0 0; white-space: pre-wrap;
@@ -202,7 +203,7 @@ def _row(index: int, finding: Finding) -> str:
         actual = '<div class=missing>未找到对应实现</div>'
     return f"""<tr>
   <td class=n>{index}</td>
-  <td><span class="tag {SEVERITY_EN[finding.severity]}">{SEVERITY_LABEL[finding.severity]}</span>
+  <td class=type><span class="tag {SEVERITY_EN[finding.severity]}">{SEVERITY_LABEL[finding.severity]}</span>
       <span class=kind>{html.escape(KIND_LABEL[finding.kind])}</span></td>
   <td><div class=where>{html.escape(finding.claim.file)}:{finding.claim.line}</div>
       <pre class=quote>{html.escape(finding.claim.quote)}</pre></td>

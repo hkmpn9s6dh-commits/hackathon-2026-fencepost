@@ -1,0 +1,19 @@
+fencepost · multi
+  3 document chunks, sending 2 from README.md (125 chars)
+    propose 2 chunk(s): completed in 85s
+  2 promises survived the quote gate, 0 refused
+  4 pairs to judge
+
+  4 drift  ·  high 3  ·  refused quotes 0  ·  87.6s
+   1. [high  ] README.md:13  multi verify
+   2. [high  ] pyproject.toml:5  dependencies = ["httpx"]
+   3. [high  ] README.md:5  Requires Python 3.11 or newer.
+   4. [low   ] pyproject.toml:5  httpx
+  written: out-multi-model\ledger.json
+           out-multi-model\report.md
+           out-multi-model\report.html
+
+real	1m42.408s
+user	0m0.031s
+sys	0m0.046s
+exit=1
